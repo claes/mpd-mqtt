@@ -16,11 +16,6 @@ import (
 
 var debug *bool
 
-type PAState struct {
-	DefaultSink          string
-	ActiveProfilePerCard map[uint32]string
-}
-
 type MpdMQTTBridge struct {
 	MQTTClient      mqtt.Client
 	MPDClient       mpd.Client
@@ -40,9 +35,11 @@ func NewMpdMQTTBridge(mpdServer string, mpdPassword string, mqttBroker string) *
 	mpdClient, err := mpd.DialAuthenticated("tcp", mpdServer, mpdPassword)
 	if err != nil {
 		panic(err)
+	} else if *debug {
+		fmt.Printf("Connected to MPD server: %s\n", mpdServer)
 	}
 
-	watcher, err := mpd.NewWatcher("tcp", mpdServer, mpdPassword, "player")
+	watcher, err := mpd.NewWatcher("tcp", mpdServer, mpdPassword, "player", "output")
 	if err != nil {
 		panic(err)
 	}
@@ -86,19 +83,32 @@ func (bridge *MpdMQTTBridge) MainLoop() {
 	go func() {
 		for subsystem := range bridge.PlaylistWatcher.Event {
 			if *debug {
-				log.Printf("Subsystem event '%s':\n", subsystem)
+				log.Printf("Event '%s':\n", subsystem)
 			}
-
-			status, err := bridge.MPDClient.Status()
-			if err != nil {
-				log.Fatalln(err)
-			} else {
-				jsonStatus, err := json.Marshal(status)
+			if subsystem == "player" {
+				status, err := bridge.MPDClient.Status()
 				if err != nil {
-					fmt.Printf("Could not serialize mpd status %v\n", err)
-					continue
+					log.Fatalln(err)
+				} else {
+					jsonStatus, err := json.Marshal(status)
+					if err != nil {
+						fmt.Printf("Could not serialize mpd status %v\n", err)
+						continue
+					}
+					bridge.PublishMQTT("mpd/status", string(jsonStatus), false)
 				}
-				bridge.PublishMQTT("mpd/status", string(jsonStatus), false)
+			} else if subsystem == "output" {
+				outputs, err := bridge.MPDClient.ListOutputs()
+				if err != nil {
+					log.Fatalln(err)
+				} else {
+					jsonStatus, err := json.Marshal(outputs)
+					if err != nil {
+						fmt.Printf("Could not serialize mpd outputs %v\n", err)
+						continue
+					}
+					bridge.PublishMQTT("mpd/outputs", string(jsonStatus), false)
+				}
 			}
 		}
 	}()

@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
@@ -51,27 +53,61 @@ func NewMpdMQTTBridge(mpdServer string, mpdPassword string, mqttBroker string) *
 	}
 
 	funcs := map[string]func(client mqtt.Client, message mqtt.Message){
-		"mpd/test": bridge.onMpdTest,
+		"mpd/output/+/set": bridge.onMpdOutputSet,
+		"mpd/pause/set":    bridge.onMpdPauseSet,
 	}
 	for key, function := range funcs {
 		token := mqttClient.Subscribe(key, 0, function)
 		token.Wait()
 	}
 	time.Sleep(2 * time.Second)
+	bridge.initialize()
 	return bridge
 }
 
 var sendMutex sync.Mutex
 
-func (bridge *MpdMQTTBridge) onMpdTest(client mqtt.Client, message mqtt.Message) {
+func (bridge *MpdMQTTBridge) onMpdOutputSet(client mqtt.Client, message mqtt.Message) {
 	sendMutex.Lock()
 	defer sendMutex.Unlock()
 
-	defaultSink := string(message.Payload())
-	if defaultSink != "" {
-		bridge.PublishMQTT("mpd/test", "", false)
-		bridge.MPDClient.Ping()
+	re := regexp.MustCompile(`^mpd/output/([^/]+)/set$`)
+	matches := re.FindStringSubmatch(message.Topic())
+	if matches != nil {
+		outputStr := matches[1]
+		output, err := strconv.ParseInt(outputStr, 10, 32)
+		if err != nil {
+			fmt.Printf("Could not parse output '%s'\n", outputStr)
+			return
+		}
+		p := string(message.Payload())
+		if p != "" {
+			enable, err := strconv.ParseBool(p)
+			if err != nil {
+				fmt.Printf("Could not parse %s as bool\n", p)
+				return
+			}
+			bridge.PublishMQTT("mpd/output/"+outputStr+"/set", "", false)
+			if enable {
+				bridge.MPDClient.EnableOutput(int(output))
+			} else {
+				bridge.MPDClient.DisableOutput(int(output))
+			}
+		}
 	}
+}
+
+func (bridge *MpdMQTTBridge) onMpdPauseSet(client mqtt.Client, message mqtt.Message) {
+	sendMutex.Lock()
+	defer sendMutex.Unlock()
+
+	pause, err := strconv.ParseBool(string(message.Payload()))
+	if err != nil {
+		fmt.Printf("Could not parse %s as bool\n", string(message.Payload()))
+		return
+	}
+	bridge.PublishMQTT("mpd/pause/set", "", false)
+	bridge.MPDClient.Pause(pause)
 }
 
 func (bridge *MpdMQTTBridge) PublishMQTT(topic string, message string, retained bool) {
@@ -79,36 +115,49 @@ func (bridge *MpdMQTTBridge) PublishMQTT(topic string, message string, retained 
 	token.Wait()
 }
 
+func (bridge *MpdMQTTBridge) initialize() {
+	bridge.publishStatus()
+	bridge.publishOutputs()
+}
+
+func (bridge *MpdMQTTBridge) publishStatus() {
+	status, err := bridge.MPDClient.Status()
+	if err != nil {
+		log.Fatalln(err)
+	} else {
+		jsonStatus, err := json.Marshal(status)
+		if err != nil {
+			fmt.Printf("Could not serialize mpd status %v\n", err)
+			return
+		}
+		bridge.PublishMQTT("mpd/status", string(jsonStatus), false)
+	}
+}
+
+func (bridge *MpdMQTTBridge) publishOutputs() {
+	outputs, err := bridge.MPDClient.ListOutputs()
+	if err != nil {
+		log.Fatalln(err)
+	} else {
+		jsonStatus, err := json.Marshal(outputs)
+		if err != nil {
+			fmt.Printf("Could not serialize mpd outputs %v\n", err)
+			return
+		}
+		bridge.PublishMQTT("mpd/outputs", string(jsonStatus), false)
+	}
+}
+
 func (bridge *MpdMQTTBridge) MainLoop() {
 	go func() {
 		for subsystem := range bridge.PlaylistWatcher.Event {
 			if *debug {
-				log.Printf("Event '%s':\n", subsystem)
+				log.Printf("Event received: '%s'\n", subsystem)
 			}
 			if subsystem == "player" {
-				status, err := bridge.MPDClient.Status()
-				if err != nil {
-					log.Fatalln(err)
-				} else {
-					jsonStatus, err := json.Marshal(status)
-					if err != nil {
-						fmt.Printf("Could not serialize mpd status %v\n", err)
-						continue
-					}
-					bridge.PublishMQTT("mpd/status", string(jsonStatus), false)
-				}
+				bridge.publishStatus()
 			} else if subsystem == "output" {
-				outputs, err := bridge.MPDClient.ListOutputs()
-				if err != nil {
-					log.Fatalln(err)
-				} else {
-					jsonStatus, err := json.Marshal(outputs)
-					if err != nil {
-						fmt.Printf("Could not serialize mpd outputs %v\n", err)
-						continue
-					}
-					bridge.PublishMQTT("mpd/outputs", string(jsonStatus), false)
-				}
+				bridge.publishOutputs()
 			}
 		}
 	}()

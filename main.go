@@ -51,7 +51,12 @@ func main() {
 	signal.Notify(c, os.Interrupt)
 
 	fmt.Printf("Started\n")
-	go bridge.MainLoop(*mpdServer, *mpdPassword)
+
+	go func() {
+		bridge.DetectReconnectMPDClient(*mpdServer, *mpdPassword)
+	}()
+
+	go bridge.MainLoop()
 	<-c
 	bridge.PlaylistWatcher.Close()
 	fmt.Printf("Shut down\n")

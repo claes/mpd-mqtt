@@ -19,10 +19,6 @@ type MpdMQTTBridge struct {
 	PlaylistWatcher mpd.Watcher
 }
 
-// func foo() {
-
-// }
-
 func CreateMPDClient(mpdServer, mpdPassword string) (*mpd.Client, *mpd.Watcher, error) {
 	mpdClient, err := mpd.DialAuthenticated("tcp", mpdServer, mpdPassword)
 	if err != nil {
@@ -158,34 +154,31 @@ func (bridge *MpdMQTTBridge) publishOutputs() {
 	}
 }
 
-func (bridge *MpdMQTTBridge) MainLoop(mpdServer, mpdPassword string) {
-	go func() {
-		for subsystem := range bridge.PlaylistWatcher.Event {
-			slog.Debug("Event received", "subsystem", subsystem)
-			if subsystem == "player" {
-				bridge.publishStatus()
-			} else if subsystem == "output" {
-				bridge.publishOutputs()
+func (bridge *MpdMQTTBridge) MainLoop() {
+	for subsystem := range bridge.PlaylistWatcher.Event {
+		slog.Debug("Event received", "subsystem", subsystem)
+		if subsystem == "player" {
+			bridge.publishStatus()
+		} else if subsystem == "output" {
+			bridge.publishOutputs()
+		}
+	}
+}
+
+func (bridge *MpdMQTTBridge) DetectReconnectMPDClient(mpdServer, mpdPassword string) {
+	for {
+		time.Sleep(10 * time.Second)
+		err := bridge.MPDClient.Ping()
+		if err != nil {
+			slog.Error("Ping error, reconnecting", "error", err)
+			mpdClient, watcher, err := CreateMPDClient(mpdServer, mpdPassword)
+			if err == nil {
+				bridge.MPDClient = *mpdClient
+				bridge.PlaylistWatcher = *watcher
+				slog.Error("Reconnected")
+			} else {
+				slog.Error("Ping when reconnecting", "error", err)
 			}
 		}
-	}()
-
-	go func() {
-		for {
-			time.Sleep(10 * time.Second)
-			err := bridge.MPDClient.Ping()
-			if err != nil {
-				slog.Error("Ping error, reconnecting", "error", err)
-				mpdClient, watcher, err := CreateMPDClient(mpdServer, mpdPassword)
-				if err == nil {
-					bridge.MPDClient = *mpdClient
-					bridge.PlaylistWatcher = *watcher
-					slog.Error("Reconnected")
-				} else {
-					slog.Error("Ping when reconnecting", "error", err)
-				}
-			}
-		}
-	}()
-
+	}
 }

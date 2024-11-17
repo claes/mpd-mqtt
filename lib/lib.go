@@ -17,6 +17,7 @@ type MpdMQTTBridge struct {
 	MQTTClient      mqtt.Client
 	MPDClient       mpd.Client
 	PlaylistWatcher mpd.Watcher
+	TopicPrefix     string
 }
 
 func CreateMPDClient(mpdServer, mpdPassword string) (*mpd.Client, *mpd.Watcher, error) {
@@ -50,12 +51,13 @@ func CreateMQTTClient(mqttBroker string) mqtt.Client {
 	return client
 }
 
-func NewMpdMQTTBridge(mpdClient *mpd.Client, watcher *mpd.Watcher, mqttClient mqtt.Client) *MpdMQTTBridge {
+func NewMpdMQTTBridge(mpdClient *mpd.Client, watcher *mpd.Watcher, mqttClient mqtt.Client, topicPrefix string) *MpdMQTTBridge {
 
 	bridge := &MpdMQTTBridge{
 		MQTTClient:      mqttClient,
 		MPDClient:       *mpdClient,
 		PlaylistWatcher: *watcher,
+		TopicPrefix:     topicPrefix,
 	}
 
 	funcs := map[string]func(client mqtt.Client, message mqtt.Message){
@@ -63,11 +65,12 @@ func NewMpdMQTTBridge(mpdClient *mpd.Client, watcher *mpd.Watcher, mqttClient mq
 		"mpd/pause/set":    bridge.onMpdPauseSet,
 	}
 	for key, function := range funcs {
-		token := mqttClient.Subscribe(key, 0, function)
+		token := mqttClient.Subscribe(topicPrefix+"/"+key, 0, function)
 		token.Wait()
 	}
 	time.Sleep(2 * time.Second)
 	bridge.initialize()
+
 	return bridge
 }
 
@@ -116,8 +119,8 @@ func (bridge *MpdMQTTBridge) onMpdPauseSet(client mqtt.Client, message mqtt.Mess
 	bridge.MPDClient.Pause(pause)
 }
 
-func (bridge *MpdMQTTBridge) PublishMQTT(topic string, message string, retained bool) {
-	token := bridge.MQTTClient.Publish(topic, 0, retained, message)
+func (bridge *MpdMQTTBridge) PublishMQTT(subtopic string, message string, retained bool) {
+	token := bridge.MQTTClient.Publish(bridge.TopicPrefix+"/"+subtopic, 0, retained, message)
 	token.Wait()
 }
 

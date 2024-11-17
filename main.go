@@ -13,6 +13,7 @@ var (
 	mpdServer   *string
 	mpdPassword *string
 	mqttBroker  *string
+	topicPrefix *string
 	help        *bool
 	debug       *bool
 )
@@ -21,6 +22,8 @@ func init() {
 	mpdServer = flag.String("mpd-address", "localhost:6600", "MPD Server address and port")
 	mpdPassword = flag.String("mpd-password", "", "MPD password (optional)")
 	mqttBroker = flag.String("broker", "tcp://localhost:1883", "MQTT broker URL")
+	topicPrefix = flag.String("topicPrefix", "", "MQTT topic prefix")
+
 	help = flag.Bool("help", false, "Print help")
 	debug = flag.Bool("debug", false, "Debug logging")
 }
@@ -45,7 +48,7 @@ func main() {
 		os.Exit(1)
 	}
 	bridge := lib.NewMpdMQTTBridge(mpdClient, watcher,
-		lib.CreateMQTTClient(*mqttBroker))
+		lib.CreateMQTTClient(*mqttBroker), *topicPrefix)
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
